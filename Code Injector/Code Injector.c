@@ -8,6 +8,7 @@ void errorHandling();
 int readDOSHeader(HANDLE hFile);
 int readFileHeader(HANDLE hFile);
 int readOptionalHeader(HANDLE hFile);
+int createNewSection(HANDLE hFile);
 
 TCHAR filePath[100];
 
@@ -15,6 +16,7 @@ struct _IMAGE_DOS_HEADER imageDOSHeader;
 struct _IMAGE_FILE_HEADER imageFileHeader;
 struct _IMAGE_OPTIONAL_HEADER imageOptionalHeader32;
 struct _IMAGE_OPTIONAL_HEADER64 imageOptionalHeader64;
+struct _IMAGE_SECTION_HEADER imageSectionHeader;
 
 DWORD bytesRead = 0;
 WORD magic = 0;
@@ -40,6 +42,9 @@ int main(int argc, char* argv[])
 			return 0;
 		}
 		if (readOptionalHeader(hFile) != 0) {
+			return 0;
+		}
+		if (createNewSection(hFile) != 0) {
 			return 0;
 		}
 		CloseHandle(hFile);
@@ -69,6 +74,119 @@ int init(int argc, char* argv[]) {
 		usuage();
 		return -1;
 	}
+
+	return 0;
+}
+
+int createNewSection(HANDLE hFile) {
+
+	BYTE name[] = { '.', 'p', 'w', 'n' };
+	DWORD virtualSize = 0x3E8;
+
+	if (magic == 0x10b) {
+
+		LONG distanceToMove = imageDOSHeader.e_lfanew + sizeof(DWORD) + sizeof(imageFileHeader) + sizeof(imageOptionalHeader32) + (sizeof(imageSectionHeader) * (imageFileHeader.NumberOfSections - 1));
+		SetFilePointer(hFile, distanceToMove, NULL, FILE_BEGIN);
+
+		ZeroMemory(&imageSectionHeader, sizeof(imageSectionHeader));
+
+		if (ReadFile(hFile, &imageSectionHeader, sizeof(imageSectionHeader), &bytesRead, NULL) == 0) {
+			errorHandling();
+			CloseHandle(hFile);
+			return -1;
+		}
+
+		DWORD virtualAddress = imageOptionalHeader32.SectionAlignment * ((imageSectionHeader.Misc.VirtualSize + imageOptionalHeader32.SectionAlignment) / imageOptionalHeader32.SectionAlignment);
+		virtualAddress += imageSectionHeader.VirtualAddress;
+
+		DWORD rawAddress = imageSectionHeader.SizeOfRawData + imageSectionHeader.PointerToRawData;
+
+		ZeroMemory(&imageSectionHeader, sizeof(imageSectionHeader));
+		CopyMemory(imageSectionHeader.Name, name, sizeof(name) / sizeof(BYTE));
+
+		imageSectionHeader.Misc.VirtualSize = virtualSize;
+		imageSectionHeader.VirtualAddress = virtualAddress;
+		imageSectionHeader.SizeOfRawData = imageOptionalHeader32.FileAlignment * ((virtualSize + imageOptionalHeader32.FileAlignment) / imageOptionalHeader32.FileAlignment);
+		imageSectionHeader.PointerToRawData = rawAddress;
+		imageSectionHeader.Characteristics = IMAGE_SCN_CNT_CODE | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE | IMAGE_SCN_MEM_EXECUTE;
+
+		printf("%s\n", imageSectionHeader.Name);
+		printf("%lX\n", imageSectionHeader.Misc.VirtualSize);
+		printf("%lX\n", imageSectionHeader.VirtualAddress);
+		printf("%lX\n", imageSectionHeader.SizeOfRawData);
+		printf("%lX\n", imageSectionHeader.PointerToRawData);
+		printf("%lX\n", imageSectionHeader.PointerToRelocations);
+		printf("%lX\n", imageSectionHeader.PointerToLinenumbers);
+		printf("%hX\n", imageSectionHeader.NumberOfRelocations);
+		printf("%hX\n", imageSectionHeader.NumberOfLinenumbers);
+		printf("%lX\n", imageSectionHeader.Characteristics);
+
+		if (WriteFile(hFile, &imageSectionHeader, sizeof(imageSectionHeader), &bytesRead, NULL) != 0) {
+			printf("Section created successfully\n");
+		}
+		else {
+			errorHandling();
+			CloseHandle(hFile);
+			return -1;
+		}
+		SetFilePointer(hFile, imageSectionHeader.PointerToRawData, NULL, FILE_BEGIN);
+
+		HANDLE hHeap = GetProcessHeap();
+
+		byte* sectionEmptyData = HeapAlloc(hHeap, HEAP_ZERO_MEMORY, imageSectionHeader.SizeOfRawData);
+
+		if (WriteFile(hFile, sectionEmptyData, imageSectionHeader.SizeOfRawData, &bytesRead, NULL) != 0) {
+			printf("Section filled with zeros\n");
+		}
+		else {
+			errorHandling();
+			CloseHandle(hFile);
+			HeapFree(hHeap, 0, sectionEmptyData);
+			CloseHandle(hHeap);
+			return -1;
+		}
+
+		HeapFree(hHeap, 0, sectionEmptyData);
+		CloseHandle(hHeap);
+
+
+		imageFileHeader.NumberOfSections += 1;
+		imageOptionalHeader32.SizeOfImage = imageOptionalHeader32.SectionAlignment * ((imageSectionHeader.Misc.VirtualSize + imageOptionalHeader32.SectionAlignment) / imageOptionalHeader32.SectionAlignment);
+		imageOptionalHeader32.SizeOfImage += imageSectionHeader.VirtualAddress;
+
+		SetFilePointer(hFile, imageDOSHeader.e_lfanew + sizeof(DWORD) + sizeof(WORD), NULL, FILE_BEGIN);
+
+		if (WriteFile(hFile, &imageFileHeader.NumberOfSections, sizeof(imageFileHeader.NumberOfSections), &bytesRead, NULL) != 0) {
+			printf("updated number of sections\n");
+		}
+		else {
+			errorHandling();
+			CloseHandle(hFile);
+			return -1;
+		}
+
+		SetFilePointer(hFile, imageDOSHeader.e_lfanew + sizeof(DWORD) + sizeof(imageFileHeader) + (sizeof(WORD) * 7) + (sizeof(DWORD) * 10) + (sizeof(BYTE) * 2), NULL, FILE_BEGIN);
+
+		if (WriteFile(hFile, &imageOptionalHeader32.SizeOfImage, sizeof(imageOptionalHeader32.SizeOfImage), &bytesRead, NULL) != 0) {
+			printf("updated size of the image\n");
+		}
+		else {
+			errorHandling();
+			CloseHandle(hFile);
+			return -1;
+		}
+	}
+	else if (magic == 0x20b) {
+		LONG distanceToMove = imageDOSHeader.e_lfanew + sizeof(DWORD) + sizeof(imageFileHeader) + sizeof(imageOptionalHeader64) + (sizeof(imageSectionHeader) * imageFileHeader.NumberOfSections);
+		SetFilePointer(hFile, distanceToMove, NULL, FILE_BEGIN);
+	}
+	else {
+		printf("unknown binary\n");
+		printf("currently only supports x86 and x64 PE\n");
+		return -1;
+	}
+
+
 
 	return 0;
 }
@@ -165,7 +283,7 @@ int readOptionalHeader(HANDLE hFile) {
 	}
 	else {
 		printf("unknown binary\n");
-		printf("currently only supports x86 and x64 PE");
+		printf("currently only supports x86 and x64 PE\n");
 		return -1;
 	}
 
