@@ -15,6 +15,7 @@ TCHAR filePath[100];
 TCHAR payload[100];
 
 DWORD payloadSize = 0x0;
+DWORD fileSize = 0x0;
 
 struct _IMAGE_DOS_HEADER imageDOSHeader;
 struct _IMAGE_FILE_HEADER imageFileHeader;
@@ -315,6 +316,51 @@ int createNewSection(HANDLE hFile) {
 		printf("%hX\n", imageSectionHeader.NumberOfRelocations);
 		printf("%hX\n", imageSectionHeader.NumberOfLinenumbers);
 		printf("%lX\n", imageSectionHeader.Characteristics);
+
+		fileSize = GetFileSize(hFile, NULL);
+
+		if ((imageSectionHeader.PointerToRawData + imageSectionHeader.SizeOfRawData) <= fileSize) {
+
+			SetFilePointer(hFile, imageSectionHeader.PointerToRawData, NULL, FILE_BEGIN);
+
+			HANDLE hHeap = GetProcessHeap();
+			BYTE* caveMiner = HeapAlloc(hHeap, HEAP_ZERO_MEMORY, imageSectionHeader.SizeOfRawData);
+
+			if (ReadFile(hFile, caveMiner, imageSectionHeader.SizeOfRawData, &bytesRead, NULL) == 0) {
+
+				errorHandling();
+				CloseHandle(hFile);
+				HeapFree(hHeap, 0, caveMiner);
+				CloseHandle(hHeap);
+				return -1;
+			}
+
+			for (size_t i = 0; i < imageSectionHeader.SizeOfRawData; i++) {
+
+				if (caveMiner[i] != 0x0) {
+					printf("no space found!..\n");
+					imageSectionHeader.PointerToRawData = fileSize;
+					break;
+				}
+
+				printf("%X, ", caveMiner[i]);
+
+				if (i != 0 && i % 10 == 0) {
+					printf("\n");
+				}
+			}
+
+
+			HeapFree(hHeap, 0, caveMiner);
+			CloseHandle(hHeap);
+
+		}
+		else {
+			imageSectionHeader.PointerToRawData = fileSize;
+		}
+
+		LONG toMove = imageDOSHeader.e_lfanew + sizeof(DWORD) + sizeof(imageFileHeader) + sizeof(imageOptionalHeader32) + (sizeof(imageSectionHeader) * (imageFileHeader.NumberOfSections));
+		SetFilePointer(hFile, toMove, NULL, FILE_BEGIN);
 
 		if (WriteFile(hFile, &imageSectionHeader, sizeof(imageSectionHeader), &bytesRead, NULL) != 0) {
 			printf("Section created successfully\n");
