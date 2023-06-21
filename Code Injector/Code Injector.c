@@ -9,6 +9,7 @@ int readDOSHeader(HANDLE hFile);
 int readFileHeader(HANDLE hFile);
 int readOptionalHeader(HANDLE hFile);
 int createNewSection(HANDLE hFile);
+int createEmptySection(HANDLE hFile);
 int insertCode(HANDLE hFile, BYTE* payloadSpace);
 
 TCHAR filePath[100];
@@ -16,12 +17,14 @@ TCHAR payload[100];
 
 DWORD payloadSize = 0x0;
 DWORD fileSize = 0x0;
+int isEmptySectionCreated = 0x0;
+DWORD padding = 0x0;
 
 struct _IMAGE_DOS_HEADER imageDOSHeader;
 struct _IMAGE_FILE_HEADER imageFileHeader;
 struct _IMAGE_OPTIONAL_HEADER imageOptionalHeader32;
 struct _IMAGE_OPTIONAL_HEADER64 imageOptionalHeader64;
-struct _IMAGE_SECTION_HEADER imageSectionHeader;
+struct _IMAGE_SECTION_HEADER imageSectionHeader, imageEmptySectionHeader;
 struct _IMAGE_SECTION_HEADER imageTextSectionHeader;
 
 
@@ -157,6 +160,115 @@ int init(int argc, char* argv[]) {
 		return -1;
 	}
 
+	return 0;
+}
+
+int createEmptySection(HANDLE hFile) {
+
+	BYTE name[] = { '.', 'e', 'm', 'p' };
+	DWORD virtualSize = payloadSize;
+
+	if (magic == 0x10b) {
+		LONG distanceToMove = imageDOSHeader.e_lfanew + sizeof(DWORD) + sizeof(imageFileHeader) + sizeof(imageOptionalHeader32) + (sizeof(imageEmptySectionHeader) * (imageFileHeader.NumberOfSections - 1));
+		SetFilePointer(hFile, distanceToMove, NULL, FILE_BEGIN);
+
+		ZeroMemory(&imageEmptySectionHeader, sizeof(imageEmptySectionHeader));
+
+		if (ReadFile(hFile, &imageEmptySectionHeader, sizeof(imageEmptySectionHeader), &bytesRead, NULL) == 0) {
+			errorHandling();
+			CloseHandle(hFile);
+			return -1;
+		}
+
+		DWORD virtualAddress = 0x0;
+
+		if (imageEmptySectionHeader.Misc.VirtualSize % imageOptionalHeader32.SectionAlignment != 0) {
+
+			virtualAddress = imageOptionalHeader32.SectionAlignment * ((imageEmptySectionHeader.Misc.VirtualSize + imageOptionalHeader32.SectionAlignment) / imageOptionalHeader32.SectionAlignment);
+		}
+		else {
+			virtualAddress = imageEmptySectionHeader.Misc.VirtualSize;
+		}
+		virtualAddress += imageEmptySectionHeader.VirtualAddress;
+
+		DWORD rawAddress = imageEmptySectionHeader.SizeOfRawData + imageEmptySectionHeader.PointerToRawData;
+
+		ZeroMemory(&imageEmptySectionHeader, sizeof(imageEmptySectionHeader));
+		CopyMemory(imageEmptySectionHeader.Name, name, sizeof(name) / sizeof(BYTE));
+
+		imageEmptySectionHeader.Misc.VirtualSize = virtualSize;
+		imageEmptySectionHeader.VirtualAddress = virtualAddress;
+
+		if (virtualSize % imageOptionalHeader32.FileAlignment != 0) {
+			imageEmptySectionHeader.SizeOfRawData = imageOptionalHeader32.FileAlignment * ((virtualSize + imageOptionalHeader32.FileAlignment) / imageOptionalHeader32.FileAlignment);
+		}
+		else {
+			imageEmptySectionHeader.SizeOfRawData = virtualSize;
+		}
+
+
+		imageEmptySectionHeader.PointerToRawData = rawAddress;
+		imageEmptySectionHeader.Characteristics = IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE;
+
+		printf("%s\n", imageEmptySectionHeader.Name);
+		printf("%lX\n", imageEmptySectionHeader.Misc.VirtualSize);
+		printf("%lX\n", imageEmptySectionHeader.VirtualAddress);
+		printf("%lX\n", imageEmptySectionHeader.SizeOfRawData);
+		printf("%lX\n", imageEmptySectionHeader.PointerToRawData);
+		printf("%lX\n", imageEmptySectionHeader.PointerToRelocations);
+		printf("%lX\n", imageEmptySectionHeader.PointerToLinenumbers);
+		printf("%hX\n", imageEmptySectionHeader.NumberOfRelocations);
+		printf("%hX\n", imageEmptySectionHeader.NumberOfLinenumbers);
+		printf("%lX\n", imageEmptySectionHeader.Characteristics);
+
+		padding = fileSize - imageEmptySectionHeader.PointerToRawData;
+		printf("padding: %lX\n", padding);
+
+		padding += imageEmptySectionHeader.Misc.VirtualSize;
+		printf("padding: %lX\n", padding);
+
+		if (padding % imageOptionalHeader32.FileAlignment != 0) {
+			padding = imageOptionalHeader32.FileAlignment * ((padding + imageOptionalHeader32.FileAlignment) / imageOptionalHeader32.FileAlignment);
+		}
+
+		printf("padding: %lX\n", padding);
+		padding += imageEmptySectionHeader.PointerToRawData;
+
+		printf("padding: %lX\n", padding);
+		padding -= fileSize;
+
+		printf("padding: %lX\n", padding);
+
+		HANDLE hHeap = GetProcessHeap();
+
+		BYTE* paddingSpace = HeapAlloc(hHeap, HEAP_ZERO_MEMORY, padding);
+
+		SetFilePointer(hFile, fileSize, NULL, FILE_BEGIN);
+
+		if (WriteFile(hFile, paddingSpace, padding, &bytesRead, NULL) != 0) {
+			printf("Added padding successfully\n");
+		}
+		else {
+			errorHandling();
+			CloseHandle(hFile);
+			HeapFree(hHeap, 0, paddingSpace);
+			CloseHandle(hHeap);
+			return -1;
+		}
+
+		HeapFree(hHeap, 0, paddingSpace);
+		CloseHandle(hHeap);
+
+	}
+	else if (magic == 0x20b) {
+
+	}
+	else
+	{
+		printf("unknown binary\n");
+		printf("currently only supports x86 and x64 PE\n");
+		return -1;
+	}
 	return 0;
 }
 
@@ -340,6 +452,7 @@ int createNewSection(HANDLE hFile) {
 				if (caveMiner[i] != 0x0) {
 					printf("no space found!..\n");
 					imageSectionHeader.PointerToRawData = fileSize;
+					isEmptySectionCreated = 0x1;
 					break;
 				}
 
@@ -359,8 +472,41 @@ int createNewSection(HANDLE hFile) {
 			imageSectionHeader.PointerToRawData = fileSize;
 		}
 
+		if (isEmptySectionCreated == 0x1) {
+			if (createEmptySection(hFile) != 0) {
+				errorHandling();
+				CloseHandle(hFile);
+				return -1;
+			}
+
+			imageSectionHeader.VirtualAddress = 0x0;
+
+			if (imageEmptySectionHeader.Misc.VirtualSize % imageOptionalHeader32.SectionAlignment != 0) {
+
+				imageSectionHeader.VirtualAddress = imageOptionalHeader32.SectionAlignment * ((imageEmptySectionHeader.Misc.VirtualSize + imageOptionalHeader32.SectionAlignment) / imageOptionalHeader32.SectionAlignment);
+			}
+			else {
+				imageSectionHeader.VirtualAddress = imageEmptySectionHeader.Misc.VirtualSize;
+			}
+			imageSectionHeader.VirtualAddress += imageEmptySectionHeader.VirtualAddress;
+
+		}
+
 		LONG toMove = imageDOSHeader.e_lfanew + sizeof(DWORD) + sizeof(imageFileHeader) + sizeof(imageOptionalHeader32) + (sizeof(imageSectionHeader) * (imageFileHeader.NumberOfSections));
 		SetFilePointer(hFile, toMove, NULL, FILE_BEGIN);
+
+		if (isEmptySectionCreated == 0x1) {
+			if (WriteFile(hFile, &imageEmptySectionHeader, sizeof(imageEmptySectionHeader), &bytesRead, NULL) != 0) {
+				printf("empty Section created successfully\n");
+			}
+			else {
+				errorHandling();
+				CloseHandle(hFile);
+				return -1;
+			}
+		}
+
+		imageSectionHeader.PointerToRawData += padding;
 
 		if (WriteFile(hFile, &imageSectionHeader, sizeof(imageSectionHeader), &bytesRead, NULL) != 0) {
 			printf("Section created successfully\n");
@@ -392,6 +538,11 @@ int createNewSection(HANDLE hFile) {
 
 
 		imageFileHeader.NumberOfSections += 1;
+
+		if (isEmptySectionCreated == 0x1) {
+			imageFileHeader.NumberOfSections += 1;
+		}
+
 		imageOptionalHeader32.SizeOfImage = imageOptionalHeader32.SectionAlignment * ((imageSectionHeader.Misc.VirtualSize + imageOptionalHeader32.SectionAlignment) / imageOptionalHeader32.SectionAlignment);
 		imageOptionalHeader32.SizeOfImage += imageSectionHeader.VirtualAddress;
 
